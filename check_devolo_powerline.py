@@ -1,79 +1,85 @@
 #!/usr/bin/env python3
 
-import requests
-import json
-import uuid
-import nagiosplugin
 import argparse
+import json
 import logging
+import re
+import uuid
+from math import floor
+from datetime import timedelta
 
-HOST = "192.168.1.4"
+import requests
+import nagiosplugin
+
 _log = logging.getLogger('nagiosplugin')
+
+# 6 days, 15h 28m 59s
+UPTIME_FMT = re.compile(
+        r'(?P<days>\d+) days, ' +
+        r'(?P<hours>\d+)h (?P<minutes>\d+)m (?P<seconds>\d+)s')
 
 
 class LegacyDevolo(nagiosplugin.Resource):
     def __init__(self, host, remote_mac=None):
         self._endpoint = "http://%s/assets/data.cfl" % host
         self._remote_mac = remote_mac
-        self._data = None
 
-    def fetch(self):
-        self._data = {}
+    def probe(self):
+        data = self.fetch_data()
+
+        matcher = UPTIME_FMT.match(data['SYSTEM.GENERAL.UPTIME'])
+        if matcher is not None:
+            uptime = timedelta(
+                    **{k: int(v) for k, v in matcher.groupdict().items()})
+            yield nagiosplugin.Metric(
+                    'uptime', int(uptime.total_seconds()), uom='s',
+                    min=0, context='uptime')
+
+        yield nagiosplugin.Metric(
+                'cpu', int(data['SYSTEM.STATS.CPU_USAGE']), uom='%', min=0,
+                max=100, context='load')
+        yield nagiosplugin.Metric(
+                'memory',
+                int(data['SYSTEM.STATS.TOTAL_MEMORY']) -
+                int(data['SYSTEM.STATS.FREE_MEMORY']),
+                uom='MB', min=0, max=int(data['SYSTEM.STATS.TOTAL_MEMORY']),
+                context='memory')
+
+        thresholds = list(map(int,
+                              data['MSPS.INTERNAL.THRESHOLDS'].split(',')))
+        yield nagiosplugin.Metric(
+                'temp', int(data['TEMPSENSORS.GENERAL.MEASURE']) / 100,
+                uom='degree', contextobj=nagiosplugin.ScalarContext(
+                    'temperature', warning=thresholds[3]/100,
+                    critical=thresholds[0]/100))
+
+        devices = zip(
+                data['DIDMNG.GENERAL.DIDS'].split(','),
+                data['DIDMNG.GENERAL.MACS'].split(','),
+                data['DIDMNG.GENERAL.RX_BPS'].split(','),
+                data['DIDMNG.GENERAL.TX_BPS'].split(','))
+        for did, mac, rx_bps, tx_bps in devices:
+            if did == '0' or did == data['NODE.GENERAL.DEVICE_ID']:
+                continue
+            yield nagiosplugin.Metric(
+                    'rx-%s' % did,
+                    floor(32 * int(rx_bps) / 1000 * .75 / .45), uom='Mbps',
+                    min=0, context='dlan')
+            yield nagiosplugin.Metric(
+                    'tx-%s' % did,
+                    floor(32 * int(tx_bps) / 1000 * .75 / .45), uom='Mbps',
+                    min=0, context='dlan')
+
+    def fetch_data(self):
+        _log.info("Fetching data")
+        data = {}
         result = requests.get(self._endpoint)
         for line in result.text.splitlines():
             if "=" in line:
+                _log.debug(line)
                 k, v = line.split("=")
-                self._data[k] = v
-
-    def cpu_usage(self):
-        if self._data is None:
-            self.fetch()
-
-        return int(self._data["SYSTEM.STATS.CPU_USAGE"])
-
-    def mem_free(self):
-        if self._data is None:
-            self.fetch()
-
-        return int(self._data["SYSTEM.STATS.FREE_MEMORY"])
-
-    def mem_total(self):
-        if self._data is None:
-            self.fetch()
-
-        return int(self._data["SYSTEM.STATS.TOTAL_MEMORY"])
-
-    def temperature(self):
-        if self._data is None:
-            self.fetch()
-
-        return int(self._data['TEMPSENSORS.GENERAL.MEASURE'])
-
-    def network(self):
-        if self._data is None:
-            self.fetch()
-
-        ids = self._data['DIDMNG.GENERAL.DIDS'].split(',')
-        macs = self._data['DIDMNG.GENERAL.MACS'].split(',')
-        rx_bps = self._data['DIDMNG.GENERAL.RX_BPS'].split(',')
-        tx_bps = self._data['DIDMNG.GENERAL.TX_BPS'].split(',')
-
-        domain_master = self._data['NODE.GENERAL.DOMAIN_MASTER_MAC_ADDR']
-
-        nodes = []
-        for did, mac, rx, tx in zip(ids, macs, rx_bps, tx_bps):
-            if did == '0':
-                continue
-            role = 'DOMAIN_MASTER' if mac == domain_master else 'END_POINT'
-            nodes.append({
-                'did': did,
-                'mac': mac,
-                'rx': rx,
-                'tx': tx,
-                'role': role,
-                })
-
-        return nodes
+                data[k] = v
+        return data
 
 
 class Devolo(nagiosplugin.Resource):
@@ -105,11 +111,11 @@ class Devolo(nagiosplugin.Resource):
             if self._remote_mac is None or \
                     self._remote_mac.to_lower() == device['mac'].to_lower():
                 yield nagiosplugin.Metric(
-                        "rx", int(device['rx']), uom='Mbps', min=0,
-                        context='dlan')
+                        "rx-%s" % device['did'], int(device['rx']), uom='Mbps',
+                        min=0, context='dlan')
                 yield nagiosplugin.Metric(
-                        "tx", int(device['tx']), uom='Mbps', min=0,
-                        context='dlan')
+                        "tx-%s" % device['did'], int(device['tx']), uom='Mbps',
+                        min=0, context='dlan')
 
         connected_clients = [
                 client
@@ -253,8 +259,10 @@ def main():
             nagiosplugin.ScalarContext('dlan'),
             nagiosplugin.ScalarContext('uptime'),
             nagiosplugin.ScalarContext('load'),
+            nagiosplugin.ScalarContext('temp'),
             nagiosplugin.ScalarContext('devices'),
             nagiosplugin.ScalarContext('memory'))
+    check.name = 'dlan'
     check.main(args.verbose)
 
 
