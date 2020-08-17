@@ -20,9 +20,8 @@ UPTIME_FMT = re.compile(
 
 
 class LegacyDevolo(nagiosplugin.Resource):
-    def __init__(self, host, remote_mac=None):
+    def __init__(self, host):
         self._endpoint = "http://%s/assets/data.cfl" % host
-        self._remote_mac = remote_mac
 
     def probe(self):
         data = self.fetch_data()
@@ -83,9 +82,8 @@ class LegacyDevolo(nagiosplugin.Resource):
 
 
 class Devolo(nagiosplugin.Resource):
-    def __init__(self, host, remote_mac, username="root", password=""):
+    def __init__(self, host, username="root", password=""):
         self._endpoint = 'http://%s/ubus' % host
-        self._remote_mac = remote_mac
         self._session_id = None
         self._username = username
         self._password = password
@@ -108,14 +106,12 @@ class Devolo(nagiosplugin.Resource):
             if device['did'] == ghninfo['device_id']:
                 continue
 
-            if self._remote_mac is None or \
-                    self._remote_mac.to_lower() == device['mac'].to_lower():
-                yield nagiosplugin.Metric(
-                        "rx-%s" % device['did'], int(device['rx']), uom='Mbps',
-                        min=0, context='dlan')
-                yield nagiosplugin.Metric(
-                        "tx-%s" % device['did'], int(device['tx']), uom='Mbps',
-                        min=0, context='dlan')
+            yield nagiosplugin.Metric(
+                    "rx-%s" % device['did'], int(device['rx']), uom='Mbps',
+                    min=0, context='dlan')
+            yield nagiosplugin.Metric(
+                    "tx-%s" % device['did'], int(device['tx']), uom='Mbps',
+                    min=0, context='dlan')
 
         connected_clients = [
                 client
@@ -247,13 +243,11 @@ def main():
     argp = argparse.ArgumentParser()
     argp.add_argument('-H', '--host', required=True,
                       help='IP address of powerline adapter to check')
-    argp.add_argument('-r', '--remote_mac',
-                      help='MAC address of remote DLAN adapter')
     argp.add_argument('-l', '--legacy', action='store_true', default=False)
     argp.add_argument('-v', '--verbose', action='count', default=0)
     args = argp.parse_args()
     resource_cls = LegacyDevolo if args.legacy else Devolo
-    resource = resource_cls(args.host, args.remote_mac)
+    resource = resource_cls(args.host)
     check = nagiosplugin.Check(
             resource,
             nagiosplugin.ScalarContext('dlan'),
