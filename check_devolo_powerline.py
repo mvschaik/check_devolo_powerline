@@ -48,7 +48,7 @@ class LegacyDevolo(nagiosplugin.Resource):
                               data['MSPS.INTERNAL.THRESHOLDS'].split(',')))
         yield nagiosplugin.Metric(
                 'temp', int(data['TEMPSENSORS.GENERAL.MEASURE']) / 100,
-                uom='degree', contextobj=nagiosplugin.ScalarContext(
+                contextobj=nagiosplugin.ScalarContext(
                     'temperature', warning=thresholds[3]/100,
                     critical=thresholds[0]/100))
 
@@ -62,11 +62,11 @@ class LegacyDevolo(nagiosplugin.Resource):
                 continue
             yield nagiosplugin.Metric(
                     'rx-%s' % did,
-                    floor(32 * int(rx_bps) / 1000 * .75 / .45), uom='Mbps',
+                    floor(32 * int(rx_bps) / 1000 * .75 / .45), uom='Mb',
                     min=0, context='dlan')
             yield nagiosplugin.Metric(
                     'tx-%s' % did,
-                    floor(32 * int(tx_bps) / 1000 * .75 / .45), uom='Mbps',
+                    floor(32 * int(tx_bps) / 1000 * .75 / .45), uom='Mb',
                     min=0, context='dlan')
 
     def fetch_data(self):
@@ -107,10 +107,10 @@ class Devolo(nagiosplugin.Resource):
                 continue
 
             yield nagiosplugin.Metric(
-                    "rx-%s" % device['did'], int(device['rx']), uom='Mbps',
+                    "rx-%s" % device['did'], int(device['rx']), uom='Mb',
                     min=0, context='dlan')
             yield nagiosplugin.Metric(
-                    "tx-%s" % device['did'], int(device['tx']), uom='Mbps',
+                    "tx-%s" % device['did'], int(device['tx']), uom='Mb',
                     min=0, context='dlan')
 
         connected_clients = [
